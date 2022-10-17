@@ -1,0 +1,18 @@
+{
+  "name": "fetch-poc",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "async": "^3.2.4",
+    "dayjs": "^1.11.5",
+    "dayjs-timezone-iana-plugin": "^0.1.0",
+    "luxon": "^3.0.4",
+    "moment-timezone": "^0.5.37",
+    "request": "^2.88.2"
+  },
+  "devDependencies": {
+    "prettier": "^2.7.1"
+  }
+}
