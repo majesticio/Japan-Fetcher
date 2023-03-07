@@ -2,8 +2,8 @@ import fs from 'fs';
 import { parse } from 'csv-parse';
 const folderPath = 'data';
 import { DateTime } from 'luxon';
-const path = 'data/202301_47_47206020.csv';
-
+// const path = 'data/202301_47_47206020.csv';
+const path = 'data/202301_38_38205020.csv';
 getLatestData(path);
 
 function getLatestData(filePath) {
@@ -41,7 +41,10 @@ function getLatestData(filePath) {
         .map((row) => {
           const obj = {};
           headers.forEach((header, i) => {
-            obj[header] = row[i];
+            const value = row[i].trim();
+            if (value !== '-' && value !== '') {
+              obj[header] = value;
+            }
           });
           return obj;
         });
