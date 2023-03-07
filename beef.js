@@ -2,20 +2,24 @@
  * This code is responsible for implementing all methods related to fetching
  * and returning data for the Japanese data sources.
  */
-'use strict';
+// import request-retry
+import request from 'requestretry';
+const controller = new AbortController();
+
+('use strict');
 // import retry from 'async-retry';
 import async from 'async';
 import axios from 'axios';
 import * as fs from 'fs';
 const REQUEST_TIMEOUT = 60000;
 //import { REQUEST_TIMEOUT } from '../lib/constants';
-import { default as baseRequest } from 'request';
+// import { default as baseRequest } from 'request';
 //  import { default as moment } from 'moment-timezone';
 import { parallel, parallelLimit } from 'async';
 import { DateTime } from 'luxon';
 // import { normalizeUnits } from 'moment-timezone';
 //import { convertUnits } from '../lib/utils';
-const request = baseRequest.defaults({ timeout: REQUEST_TIMEOUT });
+// const request = baseRequest.defaults({ timeout: REQUEST_TIMEOUT });
 //"PM10": {"value": "pm10", "unit":"ug/m3"}   validParameters[parameter].value
 const validParameters = {
   PM10: { value: 'pm10', unit: 'ppm' }, // NA?
@@ -96,87 +100,103 @@ const csv_url = `https://soramame.env.go.jp/data/map/kyokuNoudo/${year}/${String
 // console.log(csv_url);
 
 function fetchData(csv_url, cb) {
-  return request(csv_url, (err, res, body) => {
-    if (err || res.statusCode !== 200) {
-      console.log(err);
-    } else {
-      // console.log(body);
-      var stations = [];
-      const rows = body.split('\n');
-      // console.log(rows.slice(-10))
-      //   console.log(body.slice(-20));
-      const headers = rows[0].split(',');
-      for (let i = 1; i < rows.length; i++) {
-        // start at 1 to skip headers
+  return request(
+    {
+      url: csv_url,
+      maxAttempts: 5,
+      retryDelay: 1000,
+    },
+    (err, res, body) => {
+      if (err || res.statusCode !== 200) {
+        console.log(err);
+      } else {
+        // console.log(body);
+        var stations = [];
+        const rows = body.split('\n');
+        // console.log(rows.slice(-10))
+        //   console.log(body.slice(-20));
+        const headers = rows[0].split(',');
+        for (let i = 1; i < rows.length; i++) {
+          // start at 1 to skip headers
 
-        let station = {}; // create a new station object for each row
-        const row = rows[i].split(','); // split the row into columns
-        for (let j = 0; j < row.length; j++) {
-          // loop through each column
-          station[translation[headers[j]]] = row[j]; // add the value to the station object by using the header as the key
-        }
-        //append the station object to the stations array, seperated by commas. return the array to the locations variable
-        if (rows[i].length > 0) {
-          stations.push(station);
-        }
-        // writeFile(stations);
-        // console.log(stations);
-      }
-      //   const foo = stations.slice(0, 10); // STATIONS <--
-      const foo = stations;
-      // console.log(foo.length)
-      const requests = foo.map((station) => {
-        return (done) => {
-          const BASE_URL =
-            'https://soramame.env.go.jp/soramame/api/data_search';
-
-          const url = `${BASE_URL}?Start_YM=202209&End_YM=202210&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`;
-
-          // const url = `${BASE_URL}?Start_YM=${year}${(String(month - 1).padStart(2, '0'))}&End_YM=${year}${String(month).padStart(2, '0')}&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`
-          //   console.log(url);
-          //   async.retry({ times: 3, interval: 500 }, (callback) => {
-          async.retry({ times: 3, interval: 500 }, () => {
-            request(url, (err, res, body) => {
-              // make a request for each station err = error, res = response, body = body of the response
-              if (err || res.statusCode !== 200) {
-                return done({
-                  message: `Failure to load data url (${url})`,
-                });
-              }
-              const data = Object.assign(station, {
-                body: body, //JSON.parse(body)
-              });
-              // console.log(data);
-              // callback(null, data);
-              return done(null, data); //null = no error, data = the data
-            });
-          });
-        };
-      });
-
-      parallelLimit(requests, 64, (err, results) => {
-        //   parallel(requests, (err, results) => {
-        // parallel is a function from the async library that takes an array of functions and a callback
-        if (err) {
-          console.log(err);
-          return cb(err);
-        }
-        try {
-          // console.log(results[0].body);
-          const data = formatData(results);
-          // Make sure the data is valid
-          if (data === undefined) {
-            // undefined = no data
-            return cb({ message: 'Failure to parse data.' });
+          let station = {}; // create a new station object for each row
+          const row = rows[i].split(','); // split the row into columns
+          for (let j = 0; j < row.length; j++) {
+            // loop through each column
+            station[translation[headers[j]]] = row[j]; // add the value to the station object by using the header as the key
           }
-          return cb(null, data);
-        } catch (e) {
-          return cb(e);
+          //append the station object to the stations array, seperated by commas. return the array to the locations variable
+          if (rows[i].length > 0) {
+            stations.push(station);
+          }
+          // writeFile(stations);
+          // console.log(stations);
         }
-        // return results;
-      });
+        // const foo = stations.slice(0, 20); // STATIONS <--
+        const foo = stations;
+        // console.log(foo.length)
+        const requests = foo.map((station) => {
+          return (done) => {
+            const BASE_URL =
+              'https://soramame.env.go.jp/soramame/api/data_search';
+
+            const customUrl = `${BASE_URL}?Start_YM=202209&End_YM=202210&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`;
+
+            // const url = `${BASE_URL}?Start_YM=${year}${(String(month - 1).padStart(2, '0'))}&End_YM=${year}${String(month).padStart(2, '0')}&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`
+            //   console.log(url);
+            //   async.retry({ times: 3, interval: 500 }, (callback) => {
+            //   async.retry({ times: 3, interval: 500 }, () => {
+            request(
+              {
+                url: customUrl,
+                maxAttempts: 5,
+                retryDelay: 1000,
+              },
+              (err, res, body) => {
+                // make a request for each station err = error, res = response, body = body of the response
+                if (err || res.statusCode !== 200) {
+                  return done({
+                    message: `Failure to load data url (${url})`,
+                  });
+                }
+                const data = Object.assign(station, {
+                  body: body, //JSON.parse(body)
+                });
+                // console.log(data);
+                // callback(null, data);
+                return done(null, data); //null = no error, data = the data
+              }
+            );
+            //   });
+          };
+        });
+
+        async.retry({ times: 3, interval: 2000 }, () => {
+          parallelLimit(requests, 64, (err, results) => {
+            //   parallel(requests, (err, results) => {
+            // parallel is a function from the async library that takes an array of functions and a callback
+            if (err) {
+              console.log(err);
+              return cb(err);
+            }
+            try {
+              // console.log(results[0].body);
+              const data = formatData(results);
+              // Make sure the data is valid
+              if (data === undefined) {
+                // undefined = no data
+                return cb({ message: 'Failure to parse data.' });
+              }
+              return cb(null, data);
+            } catch (e) {
+              return cb(e);
+            }
+            // return results;
+          });
+        });
+      }
     }
-  });
+  );
 }
 
 function parseDate(dateString) {

@@ -5,12 +5,24 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "adm-zip": "^0.5.10",
     "async": "^3.2.4",
+    "async-queue": "^0.1.0",
+    "axios": "^1.2.2",
+    "csv-parse": "^5.3.3",
+    "csv-parser": "^3.0.0",
     "dayjs": "^1.11.5",
     "dayjs-timezone-iana-plugin": "^0.1.0",
+    "gulp": "^4.0.2",
     "luxon": "^3.0.4",
     "moment-timezone": "^0.5.37",
-    "request": "^2.88.2"
+    "node-fetch": "^3.3.0",
+    "request": "^2.88.2",
+    "request-retry": "^1.0.0",
+    "requestretry": "^7.1.0",
+    "retry": "^0.13.1",
+    "unzip": "^0.1.11",
+    "unzipper": "^0.10.11"
   },
   "devDependencies": {
     "prettier": "^2.7.1"
