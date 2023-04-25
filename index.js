@@ -122,8 +122,8 @@ function fetchData(csv_url, cb) {
         // writeFile(stations);
         // console.log(stations);
       }
-      //   const foo = stations.slice(0, 10); // STATIONS <--
-      const foo = stations;
+      const foo = stations.slice(0, 10); // STATIONS <--
+      // const foo = stations;
       // console.log(foo.length)
       const requests = foo.map((station) => {
         return (done) => {
@@ -285,6 +285,7 @@ function formatData(locations) {
     out.push(data);
     // console.log(out);
   }
+  console.log(out);
   return { name: 'unused', Measurements: out.flat() };
 }
 

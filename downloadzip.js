@@ -2,7 +2,7 @@ import request from 'request';
 import fs from 'fs';
 import unzipper from 'unzipper';
 // import csv from 'csv-parser';
-import parse from 'csv-parse';
+// import parse from 'csv-parse';
 const folderPath = './data';
 async function downloadAndUnzip(url, localPath) {
   return new Promise((resolve, reject) => {
