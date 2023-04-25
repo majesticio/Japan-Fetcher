@@ -1,68 +1,130 @@
 import { DateTime } from 'luxon';
 import got from 'got';
-import parse from 'csv-parser';
+import { createReadStream } from 'fs';
+import { createInterface } from 'readline';
+import { parse } from 'csv-parse';
 
-const fetchCsvData = async (url) => {
-  const response = await got.stream(url);
-  return new Promise((resolve, reject) => {
-    const rows = [];
-    response
-      .pipe(parse({ headers: true }))
-      .on('data', (row) => rows.push(row))
-      .on('end', () => resolve(rows))
-      .on('error', (error) => reject(error));
-  });
+let acceptableParameters = [
+  'pm25',
+  'pm10',
+  'co',
+  'so2',
+  'no2',
+  'bc',
+  'o3',
+  'no',
+  'pm1',
+  'nox',
+];
+
+const units = {
+  SO2: 'ppm',
+  NO: 'ppm',
+  NO2: 'ppm',
+  NOX: 'ppm',
+  CO: 'ppm',
+  OX: 'ppm',
+  NMHC: 'ppmC',
+  CH4: 'ppmC',
+  THC: 'ppmC',
+  SPM: 'mg/m3',
+  'PM2.5': 'µg/m3',
+  SP: 'mg/m3',
+  WD: '',
+  WS: '',
+  TEMP: '',
+  HUM: '',
 };
 
-const getJapanAirQualityData = async () => {
-  const currentTimeTokyo = DateTime.local().setZone('utc');
-  const yyyy = currentTimeTokyo.year;
-  const mm = currentTimeTokyo.month.toString().padStart(2, '0');
-  const dd = currentTimeTokyo.day.toString().padStart(2, '0');
-  const hh = currentTimeTokyo.hour.toString().padStart(2, '0');
-  const unixTimeStamp = currentTimeTokyo.toMillis();
+async function readCSV(filePath) {
+  const fileStream = createReadStream(filePath);
+  const rl = createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
+  let csvContent = '';
 
-  const url1 = `https://soramame.env.go.jp/data/sokutei/existence/${yyyy}/${mm}/${dd}/${hh}.csv?_=${unixTimeStamp}`;
-  const url2 = `https://soramame.env.go.jp/data/map/kyokuNoudo/${yyyy}/${mm}/${dd}/${hh}.csv?_=${unixTimeStamp}`;
+  for await (const line of rl) {
+    csvContent += line + '\n';
+  }
 
-  const [stationsData, coordinatesData] = await Promise.all([
-    fetchCsvData(url1),
-    fetchCsvData(url2),
-  ]);
+  return new Promise((resolve, reject) => {
+    parse(csvContent, { columns: true }, (err, records) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(records);
+      }
+    });
+  });
+}
+
+async function getAirQualityData() {
+  const metadata = await readCSV('csvs/metadata.csv');
+  const stationCoords = await readCSV('csvs/stationCoords.csv');
+
+  const now = DateTime.now().setZone('utc');
+  const unixTimeStamp = now.toMillis();
 
   const result = [];
-
-  for (const station of stationsData) {
+  let slice = metadata.slice(0, 10);
+  for (const station of slice) {
     const stationId = station['測定局コード'];
-    const url3 = `https://soramame.env.go.jp/data/sokutei/NoudoTime/${stationId}/today.csv?_=${unixTimeStamp}`;
+    const url = `https://soramame.env.go.jp/data/sokutei/NoudoTime/${stationId}/today.csv?_=${unixTimeStamp}`;
 
-    const measurementsData = await fetchCsvData(url3);
-
-    for (const measurement of measurementsData) {
-      const coordinateData = coordinatesData.find(
-        (coord) => coord['測定局コード'] === stationId
-      );
-
-      result.push({
-        station: station['測定局名称'],
-        coordinates: {
-          lat: parseFloat(coordinateData['緯度']),
-          lon: parseFloat(coordinateData['経度']),
-        },
-        date: {
-          utc: currentTimeTokyo.toUTC().toISO(),
-          local: currentTimeTokyo.toISO(),
-        },
-        parameter: measurement,
-        value: parseFloat(measurement),
-        unit: 'ppm', // Adjust the unit according to the parameter
+    try {
+      const response = await got(url);
+      const data = await new Promise((resolve, reject) => {
+        parse(response.body, { columns: true }, (err, records) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(records);
+          }
+        });
       });
+
+      for (const row of data) {
+        const coord = stationCoords.find(
+          (s) => s['測定局コード'] === stationId
+        );
+
+        for (const parameter in units) {
+          if (row.hasOwnProperty(parameter)) {
+            const json = {
+              station: station['測定局名称'],
+              location: station['住所'],
+              city: station['市区町村名'],
+              coordinates: {
+                lat: parseFloat(coord['緯度']),
+                lon: parseFloat(coord['経度']),
+              },
+              date: {
+                utc: now.toISO({ suppressMilliseconds: true }),
+                local: now
+                  .setZone('Asia/Tokyo')
+                  .toISO({ suppressMilliseconds: true }),
+              },
+              parameter: parameter.toLowerCase(),
+              value: row[parameter],
+              unit: units[parameter],
+            };
+
+            result.push(json);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(
+        `Failed to fetch data for stationId: ${stationId}`,
+        error
+      );
     }
   }
 
   return result;
-};
+}
 
-getJapanAirQualityData()
+getAirQualityData()
   .then((data) => console.log(data))
   .catch((error) => console.error(error));
