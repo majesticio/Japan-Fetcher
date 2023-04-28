@@ -77,8 +77,8 @@ function formatData(data) {
 
     for (const key of Object.keys(entry)) {
       const parameter = key.split('(')[0];
-      const unitString = key.split('(')[1];
-      const unit = unitString.replace(')', '');
+      //   const unitString = key.split('(')[1];
+      //   const unit = unitString.replace(')', '');
 
       if (allowedParameters.includes(parameter)) {
         const value = entry[key];
@@ -91,7 +91,7 @@ function formatData(data) {
             },
             parameter,
             value,
-            unit,
+            // unit,
           });
         }
       }

@@ -52,6 +52,7 @@ const day = tokyoTime.toFormat('dd');
 const csv_url = `https://soramame.env.go.jp/data/map/kyokuNoudo/${year}/${month}/${day}/01.csv`;
 
 async function fetchStationData(stationId, unixTimeStamp) {
+  // const url = https://soramame.env.go.jp/data/sokutei/noudoAll/2023/04/29/00.csv // another possible option in case of epic failure
   const url = `https://soramame.env.go.jp/data/sokutei/NoudoTime/${stationId}/today.csv?_=${unixTimeStamp}`;
   const response = await got(url);
   return new Promise((resolve, reject) => {
@@ -68,7 +69,7 @@ async function getAirQualityData() {
   const unixTimeStamp = now.toMillis();
 
   const stationsDataPromises = stationData
-    .slice(500, 510) /// ERASE WHEN READY !!! Bottleneck?
+    .slice(0, 10) /// ERASE WHEN READY !!! Bottleneck?
     .map(async (station) => {
       const stationId = station['id'];
       try {

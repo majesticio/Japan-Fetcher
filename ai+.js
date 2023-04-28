@@ -1,10 +1,16 @@
+/**
+ * This code is responsible for implementing all methods related to fetching
+ * and returning data for the Japanese data sources.
+ */
 'use strict';
 
-import * as fs from 'fs';
-const REQUEST_TIMEOUT = 60000;
-import { default as baseRequest } from 'request';
-import { parallel } from 'async';
+import axios from 'axios';
 import { DateTime } from 'luxon';
+import { parallelLimit } from 'async';
+import * as fs from 'fs';
+import baseRequest from 'request';
+
+const REQUEST_TIMEOUT = 60000;
 const request = baseRequest.defaults({ timeout: REQUEST_TIMEOUT });
 
 const validParameters = {
@@ -29,62 +35,109 @@ const validParameters = {
   HUM: { value: 'humidity', unit: '%' },
 };
 
-function convertUnits(input) {
-  return input;
-}
+const translation = {
+  緯度: 'latitude',
+  経度: 'longitude',
+  測定局コード: 'id',
+  測定局名称: 'bureauName',
+  所在地: 'location',
+  測定局種別: 'measuringStationType',
+  問い合わせ先: 'contactInformation',
+  都道府県コード: 'prefectureCode',
+};
+
+const settings = {
+  timeZone: 'Asia/Tokyo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+};
+
+const now = new Date().toLocaleString('ja-JP', settings);
+const [_, year, month, day] = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(now);
+const csv_url = `https://soramame.env.go.jp/data/map/kyokuNoudo/${year}/${month}/${String(
+  day - 1
+).padStart(2, '0')}/01.csv`;
 
 function fetchData(csv_url, cb) {
   return request(csv_url, (err, res, body) => {
     if (err || res.statusCode !== 200) {
       console.log(err);
     } else {
+      // console.log(body);
       var stations = [];
       const rows = body.split('\n');
+      // console.log(rows.slice(-10))
+      //   console.log(body.slice(-20));
       const headers = rows[0].split(',');
       for (let i = 1; i < rows.length; i++) {
-        let station = {};
-        const row = rows[i].split(',');
+        // start at 1 to skip headers
+
+        let station = {}; // create a new station object for each row
+        const row = rows[i].split(','); // split the row into columns
         for (let j = 0; j < row.length; j++) {
-          station[translation[headers[j]]] = row[j];
+          // loop through each column
+          station[translation[headers[j]]] = row[j]; // add the value to the station object by using the header as the key
         }
+        //append the station object to the stations array, seperated by commas. return the array to the locations variable
         if (rows[i].length > 0) {
           stations.push(station);
         }
+        // writeFile(stations);
+        // console.log(stations);
       }
-      const foo = stations.slice(0, 10);
+      const foo = stations.slice(0, 10); // STATIONS <--
+      // const foo = stations;
+      // console.log(foo.length)
       const requests = foo.map((station) => {
         return (done) => {
           const BASE_URL =
             'https://soramame.env.go.jp/soramame/api/data_search';
+
           const url = `${BASE_URL}?Start_YM=202209&End_YM=202210&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`;
-          console.log(url);
-          request(url, (err, res, body) => {
-            if (err || res.statusCode !== 200) {
-              return done({
-                message: `Failure to load data url (${url})`,
+
+          // const url = `${BASE_URL}?Start_YM=${year}${(String(month - 1).padStart(2, '0'))}&End_YM=${year}${String(month).padStart(2, '0')}&TDFKN_CD=${station.prefectureCode}&SKT_CD=${station.id}`
+          //   console.log(url);
+          //   async.retry({ times: 3, interval: 500 }, (callback) => {
+          async.retry({ times: 3, interval: 500 }, () => {
+            request(url, (err, res, body) => {
+              // make a request for each station err = error, res = response, body = body of the response
+              if (err || res.statusCode !== 200) {
+                return done({
+                  message: `Failure to load data url (${url})`,
+                });
+              }
+              const data = Object.assign(station, {
+                body: body, //JSON.parse(body)
               });
-            }
-            const data = Object.assign(station, {
-              body: body,
+              // console.log(data);
+              // callback(null, data);
+              return done(null, data); //null = no error, data = the data
             });
-            return done(null, data);
           });
         };
       });
-      parallel(requests, (err, results) => {
+
+      parallelLimit(requests, 64, (err, results) => {
+        //   parallel(requests, (err, results) => {
+        // parallel is a function from the async library that takes an array of functions and a callback
         if (err) {
           console.log(err);
           return cb(err);
         }
         try {
+          // console.log(results[0].body);
           const data = formatData(results);
+          // Make sure the data is valid
           if (data === undefined) {
+            // undefined = no data
             return cb({ message: 'Failure to parse data.' });
           }
           return cb(null, data);
         } catch (e) {
           return cb(e);
         }
+        // return results;
       });
     }
   });
@@ -117,24 +170,7 @@ function parseDate(dateString) {
   ); // this is a luxon DateTime object that is made by parsing the date string stating with
   return d;
 }
-const parseDate = (dateString) => {
-  const pattern = /(\d{4})-(\d{2})-(\d{2})\s(\d{2}):(\d{2}):(\d{2})/;
-  const regex = new RegExp(pattern);
-  const groups = regex.exec(dateString);
-  const seconds = groups[6];
-  const minutes = groups[5];
-  const hour = groups[4];
-  const day = groups[3];
-  const month = groups[2];
-  const year = groups[1];
-  const d = DateTime.fromISO(
-    `${year}-${month}-${day}T${hour}:${minutes}:${seconds}`,
-    {
-      zone: 'Asia/Tokyo',
-    }
-  );
-  return d;
-};
+
 function formatData(locations) {
   let out = [];
   for (const location of locations) {
@@ -202,18 +238,20 @@ function formatData(locations) {
             name: 'Ministry of the Environment Wide Area Monitoring System for Air Pollutants (Soramamekun)',
             url: 'https://soramame.env.go.jp',
           },
-          // {
-          //     name: 'japan-air-pollution',
-          //     url: 'https://yourwebsite.com',
-          // },
         ],
-        averagingPeriod: {
-          unit: 'hours',
-          value: 1,
-        },
+        averagingPeriod: { unit: 'hours', value: 1 },
       };
     });
     out.push(data);
+    // console.log(out);
   }
-  return out;
+  console.log(out);
+  return { name: 'unused', Measurements: out.flat() };
 }
+
+function writeFile(data) {
+  fs.writeFileSync('./out.json', JSON.stringify(data));
+}
+
+fetchData(csv_url, (err, data) => writeFile(data));
+// console.log(typeof (month - 1))
