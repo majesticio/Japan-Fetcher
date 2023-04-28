@@ -1,121 +1,188 @@
-import request from 'request';
-import unzipper from 'unzipper';
-import { performance } from 'perf_hooks';
-import csvtojson from 'csvtojson';
-import fs from 'fs/promises';
-import iconv from 'iconv-lite';
-import { DateTime, IANAZone } from 'luxon';
+'use strict';
 
-async function downloadAndUnzip(url, localPath) {
+import { performance } from 'perf_hooks';
+import { DateTime } from 'luxon';
+import { parse } from 'csv-parse';
+import got from 'got';
+
+const translation = {
+  緯度: 'latitude',
+  経度: 'longitude',
+  測定局コード: 'id',
+  測定局名称: 'bureauName',
+  所在地: 'location',
+  測定局種別: 'measuringStationType',
+  問い合わせ先: 'contactInformation',
+  都道府県コード: 'prefectureCode',
+};
+
+async function fetchStations(csv_url) {
+  try {
+    const response = await got(csv_url);
+    const body = response.body;
+    const rows = body.split('\n');
+    const headers = rows[0].split(',');
+
+    return rows.slice(1).reduce((stations, row) => {
+      const rowData = row.split(',');
+      if (rowData.length > 1) {
+        const station = headers.reduce((acc, header, index) => {
+          acc[translation[header]] = rowData[index];
+          return acc;
+        }, {});
+        stations.push(station);
+      }
+      return stations;
+    }, []);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+const getTokyoDateTimeMinusHour = () => {
+  const now = DateTime.utc().setZone('Asia/Tokyo');
+  return now.minus({ days: 1 });
+};
+
+const tokyoTime = getTokyoDateTimeMinusHour();
+const year = tokyoTime.toFormat('yyyy');
+const month = tokyoTime.toFormat('MM');
+const day = tokyoTime.toFormat('dd');
+
+const csv_url = `https://soramame.env.go.jp/data/map/kyokuNoudo/${year}/${month}/${day}/01.csv`;
+
+async function fetchStationData(stationId, unixTimeStamp) {
+  const url = `https://soramame.env.go.jp/data/sokutei/NoudoTime/${stationId}/today.csv?_=${unixTimeStamp}`;
+  const response = await got(url);
   return new Promise((resolve, reject) => {
-    request
-      .post(url)
-      .on('error', (error) => {
-        reject(error);
-      })
-      .pipe(unzipper.Extract({ path: localPath }))
-      .on('close', () => {
-        resolve();
-      });
+    parse(response.body, { columns: true }, (err, records) => {
+      err ? reject(err) : resolve(records);
+    });
   });
 }
 
-const path = './data';
-const url =
-  'https://soramame.env.go.jp/soramame/download?DL_KBN=3&Target_YM=202304&TDFKN_CD=00&SKT_CD=';
+async function getAirQualityData() {
+  const stationData = await fetchStations(csv_url);
 
-const startTime = performance.now();
-downloadAndUnzip(url, path).then(() => {
-  const endTime = performance.now();
-  console.log(`Execution time: ${endTime - startTime} ms`);
-});
+  const now = DateTime.now().setZone('utc');
+  const unixTimeStamp = now.toMillis();
 
-async function parseCSVtoJSON(filePath) {
-  const fileContent = await fs.readFile(filePath);
-  const utf8Content = iconv.decode(fileContent, 'Shift_JIS');
+  const stationsDataPromises = stationData
+    .slice(500, 510) /// ERASE WHEN READY !!! Bottleneck?
+    .map(async (station) => {
+      const stationId = station['id'];
+      try {
+        const data = await fetchStationData(stationId, unixTimeStamp);
 
-  const lines = utf8Content.split('\n');
-  const header = lines[0].replace('PM2.5', 'PM25');
-  const last24Lines = lines.slice(-47); // Keep the last 24 rows + header
-  const content = [header, ...last24Lines.slice(1)].join('\n');
+        const result = data.flatMap((row) => {
+          return Object.entries(units)
+            .filter(
+              ([parameter]) =>
+                row.hasOwnProperty(parameter) && row[parameter] !== ''
+            )
+            .map(([parameter]) => {
+              const standardizedParam =
+                parameter === 'PM2.5'
+                  ? 'pm25'
+                  : parameter.toLowerCase();
 
-  const jsonArray = await csvtojson().fromString(content);
-  return jsonArray;
-}
+              if (acceptableParameters.includes(standardizedParam)) {
+                const value = parseFloat(row[parameter]);
+                if (!isNaN(value)) {
+                  return {
+                    // station: station['bureauName'],
+                    location: station.location,
+                    city: '', // needs to pull in other csv 市区町村名
+                    coordinates: {
+                      latitutde: parseFloat(station.latitude),
+                      longitude: parseFloat(station.longitude),
+                    },
+                    date: {
+                      utc: now
+                        .startOf('hour')
+                        .toFormat("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                      local: now
+                        .setZone('Asia/Tokyo')
+                        .startOf('hour')
+                        .toFormat("yyyy-MM-dd'T'HH:mm:ssZZ"),
+                    },
+                    parameter: standardizedParam,
+                    value: value,
+                    unit: units[parameter],
+                    attribution: [
+                      {
+                        name: 'Ministry of the Environment Air Pollutant Wide Area Monitoring System',
+                        url: 'https://soramame.env.go.jp/',
+                      },
+                    ],
+                    averagingPeriod: { unit: 'hours', value: 1 },
+                  };
+                }
+              }
+              return null;
+            })
+            .filter((item) => item !== null);
+        });
 
-async function processCSVFiles(directoryPath) {
-  try {
-    const fileNames = await fs.readdir(directoryPath);
-    const csvFiles = fileNames.filter((fileName) =>
-      fileName.endsWith('.csv')
-    );
-
-    const jsonArray = [];
-    for (const csvFile of csvFiles) {
-      const filePath = `${directoryPath}/${csvFile}`;
-      const jsonData = await parseCSVtoJSON(filePath);
-      jsonArray.push(...jsonData); // Use the spread operator to add the objects directly
-    }
-
-    return jsonArray;
-  } catch (error) {
-    console.error('Error processing CSV files:', error);
-  }
-}
-
-//   const dataDirectory = './data';
-//   processCSVFiles(dataDirectory).then((combinedJsonArray) => {
-//     console.dir(combinedJsonArray, { depth: null });
-//   });
-
-function formatData(data) {
-  const allowedParameters = [
-    'PM25',
-    'PM10',
-    'NO',
-    'NO2',
-    'NOx',
-    'SO2',
-    'O3',
-  ];
-  const formattedData = [];
-
-  for (const entry of data) {
-    const station = entry['測定局コード'];
-    const date = DateTime.fromFormat(
-      `${entry['日付']} ${entry['時']}`,
-      'yyyy/MM/dd H',
-      { zone: 'Asia/Tokyo' }
-    );
-    const dateUTC = date.toUTC().toISO();
-    const dateLocal = date.toISO();
-
-    for (const key of Object.keys(entry)) {
-      const parameter = key.split('(')[0];
-
-      if (allowedParameters.includes(parameter)) {
-        const value = entry[key];
-
-        if (value !== '' && value !== null) {
-          formattedData.push({
-            station,
-            date: {
-              utc: dateUTC,
-              local: dateLocal,
-            },
-            parameter,
-            value,
-          });
-        }
+        return result;
+      } catch (error) {
+        console.error(
+          `Failed to fetch data for stationId: ${stationId}`,
+          error
+        );
+        return [];
       }
-    }
-  }
+    });
 
-  return formattedData;
+  const results = await Promise.all(stationsDataPromises);
+
+  // Flatten the array of arrays
+  return results.flat();
 }
 
-const dataDirectory = './data';
-processCSVFiles(dataDirectory).then((combinedJsonArray) => {
-  const formattedData = formatData(combinedJsonArray);
-  console.dir(formattedData, { depth: null });
-});
+async function main() {
+  const start = performance.now();
+  try {
+    const data = await getAirQualityData();
+    console.dir(data, { depth: null });
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const end = performance.now();
+    console.log(`Total execution time: ${end - start} milliseconds`);
+  }
+}
+
+main();
+
+const acceptableParameters = [
+  'pm25',
+  'pm10',
+  'co',
+  'so2',
+  'no2',
+  'bc',
+  'o3',
+  'no',
+  'pm1',
+  'nox',
+];
+
+const units = {
+  SO2: 'ppm',
+  NO: 'ppm',
+  NO2: 'ppm',
+  NOX: 'ppm',
+  CO: 'ppm',
+  OX: 'ppm',
+  NMHC: 'ppmC',
+  CH4: 'ppmC',
+  THC: 'ppmC',
+  SPM: 'mg/m3',
+  'PM2.5': 'µg/m3',
+  SP: 'mg/m3',
+  WD: '',
+  WS: '',
+  TEMP: '',
+  HUM: '',
+};
